@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron:  '0 2 * * *'
+env:
+  from_repo: openethereum/openethereum
+
+jobs:
+  check:
+    runs-on: ubuntu-18.04
+    outputs:
+      version: ${{ steps.check-new-release.outputs.version }}
+    steps:
+    - uses: actions/checkout@v2
+      with:
+         fetch-depth: '0'
+    - name: Check new release
+      id: check-new-release
+      run: |
+        sudo apt install -y jq
+        current_version=$(curl https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest -s | jq .name -r)
+        target_version=$(curl https://raw.githubusercontent.com/${from_repo}/main/bin/ethkey/Cargo.toml | grep '^version = ' | awk '{print $3}' | tr -d '"')
+        if [ "$current_version" == "target_version" ]; then
+          echo "::set-output name=version::null"
+        else
+          if [ $(git tag -l "$target_version") ]; then
+            git push origin :$target_version
+            git tag -d $target_version
+          fi
+          git tag $target_version
+          git push origin $target_version
+          echo "::set-output name=version::$target_version"
+        fi
+
+  release:
+    needs: ["check"]
+    if: needs.check.outputs.version != 'null'
+    strategy:
+      matrix:
+        target:
+        - x86_64-apple-darwin
+        - x86_64-pc-windows-msvc
+        - x86_64-unknown-linux-gnu
+        include:
+        - target: x86_64-unknown-linux-gnu
+          os:     ubuntu-latest
+          native: true
+        - target: x86_64-apple-darwin
+          os:     macos-latest
+          native: true
+        - target: x86_64-pc-windows-msvc
+          os:     windows-2016
+          native: true
+
+    runs-on: ${{matrix.os}}
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        repository: ${{env.from_repo}}
+
+    # An issue with BSD Tar causes sporadic failures on macOS.
+    # c.f https://github.com/actions/cache/issues/403
+    - name: Install GNU Tar
+      if: ${{ matrix.os == 'macos-latest' }}
+      run: |
+        brew install gnu-tar
+        echo /usr/local/opt/gnu-tar/libexec/gnubin > "$GITHUB_PATH"
+
+    - name: Cache Cargo
+      uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ matrix.os }}-${{ matrix.target }} cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+
+    - name: Package
+      id: package
+      shell: bash
+      env:
+        target: ${{ matrix.target }}
+        version: ${{ needs.check.outputs.version }}
+      run: |
+        set -euxo pipefail
+
+        src=`pwd`
+        dist=$src/dist
+        bin=ethkey
+        name=$bin-$version-$target
+        executable=target/$target/release/$bin
+
+        cargo build -p ethkey-cli --target $target --release 
+
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          executable=$executable.exe
+        fi
+
+        mkdir $dist
+        cp $executable $dist
+        cd $dist
+
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+            archive=$dist/$name.zip
+            7z a $archive *
+            echo "::set-output name=archive::`pwd -W`/$name.zip"
+        else
+            archive=$dist/$name.tar.gz
+            tar czf $archive *
+            echo "::set-output name=archive::$archive"
+        fi
+    - name: Publish Archive
+      uses: softprops/action-gh-release@v1
+      with:
+        body: '-'
+        files: ${{ steps.package.outputs.archive }}
+        tag_name: ${{ needs.check.outputs.version }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
