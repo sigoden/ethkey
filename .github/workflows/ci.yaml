@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  push:
   workflow_dispatch:
   schedule:
     - cron:  '0 2 * * *'
@@ -19,6 +20,7 @@ jobs:
     - name: Check new release
       id: check-new-release
       run: |
+        set -euxo pipefail
         sudo apt install -y jq
         current_version=$(curl https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest -s | jq .name -r)
         target_version=$(curl https://raw.githubusercontent.com/${from_repo}/main/bin/ethkey/Cargo.toml | grep '^version = ' | awk '{print $3}' | tr -d '"')
