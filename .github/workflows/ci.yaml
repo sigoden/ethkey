@@ -1,7 +1,6 @@
 name: CI
 
 on:
-  push:
   workflow_dispatch:
   schedule:
     - cron:  '0 2 * * *'
@@ -19,12 +18,14 @@ jobs:
          fetch-depth: '0'
     - name: Check new release
       id: check-new-release
+      shell: bash
       run: |
         set -euxo pipefail
+
         sudo apt install -y jq
         current_version=$(curl https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest -s | jq .name -r)
         target_version=$(curl https://raw.githubusercontent.com/${from_repo}/main/bin/ethkey/Cargo.toml | grep '^version = ' | awk '{print $3}' | tr -d '"')
-        if [ "$current_version" == "target_version" ]; then
+        if [ "$current_version" == "$target_version" ]; then
           echo "::set-output name=version::null"
         else
           if [ $(git tag -l "$target_version") ]; then
